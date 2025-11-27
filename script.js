@@ -10,6 +10,7 @@
   const TALKERS = [1, 2, 3, 4, 5, 6];
 
   // ---------- DOM refs ----------
+  const preloadBtn = document.getElementById('preload-btn');
   const startBtn = document.getElementById('start-btn');
   const downloadBtn = document.getElementById('download-btn');
   const statusEl = document.getElementById('status');
@@ -18,6 +19,7 @@
   const messageEl = document.getElementById('message');
   const imgEl = document.getElementById('stimulus-img');
   const participantInput = document.getElementById('participant-id');
+  const configEl = document.getElementById('config');
 
   // ---------- Helpers ----------
   const delay = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -198,6 +200,23 @@
     imgEl.style.display = 'block';
   }
 
+  let preparedSession = null;
+
+  function enterExperimentScreen() {
+    configEl.classList.add('hidden');
+    preloadBtn.classList.add('hidden');
+    startBtn.classList.add('hidden');
+    downloadBtn.classList.add('hidden');
+    setStatus('');
+    setLog('');
+  }
+
+  function exitExperimentScreen() {
+    configEl.classList.remove('hidden');
+    preloadBtn.classList.remove('hidden');
+    document.body.classList.remove('running');
+  }
+
   function waitForResponse(timeoutMs, audioStartMs) {
     return new Promise((resolve) => {
       let settled = false;
@@ -303,7 +322,7 @@
       if (aborted) {
         setStatus('ESCで中断しました');
         showMessage('中断しました');
-        startBtn.disabled = false;
+        document.body.classList.remove('running');
         return { results, aborted: true };
       }
 
@@ -334,31 +353,60 @@
 
     setStatus('セッション完了。結果をダウンロードできます。');
     showMessage('終了しました。お疲れさまでした。');
+    document.body.classList.remove('running');
     return { results, aborted: false };
   }
 
   // ---------- Main flow ----------
-  startBtn.addEventListener('click', async () => {
+  preloadBtn.addEventListener('click', async () => {
     const participantId = participantInput.value.trim();
     if (!participantId) {
       setStatus('参加者IDを入力してください。');
       return;
     }
 
+    preloadBtn.disabled = true;
+    startBtn.classList.add('hidden');
     startBtn.disabled = true;
     downloadBtn.classList.add('hidden');
+    preparedSession = null;
     setStatus('スケジュールを作成しています...');
     setLog('');
     try {
       const schedule = buildSchedule(participantId);
       const assets = await preloadAssets(schedule.talkersByWord);
-      setStatus('準備完了。準備ができたらスペースキーで開始してください。');
+      preparedSession = { participantId, schedule, assets };
+      setStatus('プリロード完了。準備ができたらスペースキーで開始してください。');
       setLog(`条件リスト: ${schedule.conditionList} / Exposure: ${schedule.exposureOrder} / Single talker: T${schedule.nvTalker}`);
       showMessage('スペースキーで開始');
+      startBtn.classList.remove('hidden');
+      startBtn.disabled = false;
+    } catch (err) {
+      console.error(err);
+      setStatus(`エラー: ${err.message}`);
+      preloadBtn.disabled = false;
+    }
+  });
 
+  startBtn.addEventListener('click', async () => {
+    if (!preparedSession) {
+      setStatus('先にプリロードを実行してください。');
+      return;
+    }
+
+    const { participantId, schedule, assets } = preparedSession;
+    startBtn.disabled = true;
+    enterExperimentScreen();
+
+    try {
       const { results, aborted } = await runExperiment(participantId, schedule, assets);
+      exitExperimentScreen();
+      startBtn.classList.add('hidden');
+      preparedSession = null;
+
       if (aborted) {
-        startBtn.disabled = false;
+        setStatus('中断しました。必要なら再度プリロードしてください。');
+        preloadBtn.disabled = false;
         return;
       }
 
@@ -376,10 +424,14 @@
       };
       setStatus('結果をダウンロードしてください');
       setLog(`トライアル数: ${results.length}`);
+      preloadBtn.disabled = false;
     } catch (err) {
       console.error(err);
       setStatus(`エラー: ${err.message}`);
+      exitExperimentScreen();
       startBtn.disabled = false;
+      preloadBtn.disabled = false;
+      preparedSession = null;
     }
   });
 })();
